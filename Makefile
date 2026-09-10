@@ -136,6 +136,7 @@ UPROGS=\
 	$U/_uptime\
 	$U/_time1\
 	$U/_sleep\
+	$U/_time\
 	$U/_matmul\
 	$U/_grep\
 	$U/_init\
