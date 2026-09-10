@@ -36,6 +36,20 @@ sys_wait(void)
   return kwait(p);
 }
 
+// wait2 waits for a child and returns both
+// its exit status and resource usage.
+uint64
+sys_wait2(void)
+{
+  uint64 status;
+  uint64 rusage;
+
+  argaddr(0, &status);
+  argaddr(1, &rusage);
+
+  return wait2(status, rusage);
+}
+
 uint64
 sys_sbrk(void)
 {
@@ -45,6 +59,7 @@ sys_sbrk(void)
 
   argint(0, &n);
   argint(1, &t);
+
   addr = myproc()->sz;
 
   if (t == SBRK_EAGER || n < 0) {
@@ -52,15 +67,16 @@ sys_sbrk(void)
       return -1;
     }
   } else {
-    // Lazily allocate memory for this process: increase its memory
-    // size but don't allocate memory. If the processes uses the
-    // memory, vmfault() will allocate it.
+    // Lazily allocate memory for this process.
     if (addr + n < addr)
       return -1;
+
     if (addr + n > TRAPFRAME)
       return -1;
+
     myproc()->sz += n;
   }
+
   return addr;
 }
 
@@ -71,20 +87,25 @@ sys_pause(void)
   uint ticks0;
 
   argint(0, &n);
+
   if (n < 0)
     n = 0;
+
   acquire(&tickslock);
   ticks0 = ticks;
+
   while (ticks - ticks0 < n) {
     if (killed(myproc())) {
       release(&tickslock);
       return -1;
     }
+
     sleep_prepare(&ticks);
     release(&tickslock);
     sleep();
     acquire(&tickslock);
   }
+
   release(&tickslock);
   return 0;
 }
@@ -98,8 +119,8 @@ sys_kill(void)
   return kkill(pid);
 }
 
-// return how many clock tick interrupts have occurred
-// since start.
+// Return how many clock tick interrupts
+// have occurred since system start.
 uint64
 sys_uptime(void)
 {
@@ -108,5 +129,6 @@ sys_uptime(void)
   acquire(&tickslock);
   xticks = ticks;
   release(&tickslock);
+
   return xticks;
 }
