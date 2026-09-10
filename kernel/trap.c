@@ -44,7 +44,7 @@ usertrap(void)
 
   // send interrupts and exceptions to kerneltrap(),
   // since we're now in the kernel.
-  w_stvec((uint64)kernelvec); //DOC: kernelvec
+  w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
 
@@ -73,8 +73,10 @@ usertrap(void)
                      (r_scause() == 13) ? 1 : 0) != 0) {
     // page fault on lazily-allocated page
   } else {
-    printk("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
-    printk("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
+    printk("usertrap(): unexpected scause 0x%lx pid=%d\n",
+           r_scause(), p->pid);
+    printk("            sepc=0x%lx stval=0x%lx\n",
+           r_sepc(), r_stval());
     setkilled(p);
   }
 
@@ -82,8 +84,10 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2)
+  if (which_dev == 2) {
+    p->cputime++;
     yield();
+  }
 
   prepare_return();
 
@@ -113,18 +117,16 @@ prepare_return(void)
 
   // set up trapframe values that uservec will need when
   // the process next traps into the kernel.
-  p->trapframe->kernel_satp = r_satp();         // kernel page table
-  p->trapframe->kernel_sp = p->kstack + PGSIZE; // process's kernel stack
+  p->trapframe->kernel_satp = r_satp();
+  p->trapframe->kernel_sp = p->kstack + PGSIZE;
   p->trapframe->kernel_trap = (uint64)usertrap;
-  p->trapframe->kernel_hartid = r_tp(); // hartid for cpuid()
+  p->trapframe->kernel_hartid = r_tp();
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.
-
-  // set S Previous Privilege mode to User.
   unsigned long x = r_sstatus();
-  x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
-  x |= SSTATUS_SPIE; // enable interrupts in user mode
+  x &= ~SSTATUS_SPP;
+  x |= SSTATUS_SPIE;
   w_sstatus(x);
 
   // set S Exception Program Counter to the saved user pc.
@@ -143,19 +145,22 @@ kerneltrap()
 
   if ((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
+
   if (intr_get() != 0)
     panic("kerneltrap: interrupts enabled");
 
   if ((which_dev = devintr()) == 0) {
     // interrupt or trap from an unknown source
-    printk("scause=0x%lx sepc=0x%lx stval=0x%lx\n", scause, r_sepc(),
-           r_stval());
+    printk("scause=0x%lx sepc=0x%lx stval=0x%lx\n",
+           scause, r_sepc(), r_stval());
     panic("kerneltrap");
   }
 
   // give up the CPU if this is a timer interrupt.
-  if (which_dev == 2 && myproc() != 0)
+  if (which_dev == 2 && myproc() != 0) {
+    myproc()->cputime++;
     yield();
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
@@ -173,9 +178,7 @@ clockintr()
     release(&tickslock);
   }
 
-  // ask for the next timer interrupt. this also clears
-  // the interrupt request. 1000000 is about a tenth
-  // of a second.
+  // ask for the next timer interrupt.
   w_stimecmp(r_time() + 1000000);
 }
 
@@ -190,9 +193,7 @@ devintr()
   uint64 scause = r_scause();
 
   if (scause == 0x8000000000000009L) {
-    // this is a supervisor external interrupt, via PLIC.
-
-    // irq indicates which device interrupted.
+    // supervisor external interrupt, via PLIC.
     int irq = plic_claim();
 
     if (irq == UART0_IRQ) {
@@ -203,17 +204,16 @@ devintr()
       printk("unexpected interrupt irq=%d\n", irq);
     }
 
-    // the PLIC allows each device to raise at most one
-    // interrupt at a time; tell the PLIC the device is
-    // now allowed to interrupt again.
     if (irq)
       plic_complete(irq);
 
     return 1;
+
   } else if (scause == 0x8000000000000005L) {
     // timer interrupt.
     clockintr();
     return 2;
+
   } else {
     return 0;
   }
