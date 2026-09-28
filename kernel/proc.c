@@ -525,12 +525,26 @@ scheduler(void)
     struct proc *best = 0;
     int best_priority = -1;
 
-    // Inspect each runnable process, keeping the highest priority.
+#if ENABLE_AGING
+    uint now = ticks;
+#endif
+
+    // Choose the runnable process with the highest effective priority.
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if (p->state == RUNNABLE && p->priority > best_priority) {
-        best = p;
-        best_priority = p->priority;
+      if (p->state == RUNNABLE) {
+        int effective_priority = p->priority;
+#if ENABLE_AGING
+        uint waited = now - p->readytime;
+        if (waited >= (uint)(MAXEFFPRIORITY - effective_priority))
+          effective_priority = MAXEFFPRIORITY;
+        else
+          effective_priority += (int)waited;
+#endif
+        if (effective_priority > best_priority) {
+          best = p;
+          best_priority = effective_priority;
+        }
       }
       release(&p->lock);
     }

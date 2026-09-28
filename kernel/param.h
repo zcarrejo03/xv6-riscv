@@ -17,3 +17,7 @@
 #define SCHED_RR       0
 #define SCHED_PRIORITY 1
 #define SCHED_POLICY   SCHED_PRIORITY
+
+// One priority point per tick waiting in RUNNABLE, capped at 99.
+#define ENABLE_AGING   1
+#define MAXEFFPRIORITY 99
