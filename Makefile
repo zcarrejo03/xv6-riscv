@@ -140,6 +140,7 @@ UPROGS=\
 	$U/_matmul\
         $U/_ps\
         $U/_prioritytest\
+        $U/_priorityorder\
 	$U/_grep\
 	$U/_init\
 	$U/_kill\

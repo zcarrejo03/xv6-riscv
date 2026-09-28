@@ -518,39 +518,57 @@ scheduler(void)
 
   c->proc = 0;
   for (;;) {
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
     intr_off();
 
+#if SCHED_POLICY == SCHED_PRIORITY
+    struct proc *best = 0;
+    int best_priority = -1;
+
+    // Inspect each runnable process, keeping the highest priority.
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE && p->priority > best_priority) {
+        best = p;
+        best_priority = p->priority;
+      }
+      release(&p->lock);
+    }
+
+    if (best != 0) {
+      acquire(&best->lock);
+      if (best->state == RUNNABLE) {
+        best->state = RUNNING;
+        c->proc = best;
+        swtch(&c->context, &best->context);
+        mycpu()->intena = 0;
+        c->proc = 0;
+      }
+      release(&best->lock);
+    } else {
+      asm volatile("wfi");
+    }
+
+#elif SCHED_POLICY == SCHED_RR
     int found = 0;
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
-
-        // Don't re-enable interrupts on release.
         mycpu()->intena = 0;
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
         c->proc = 0;
         found = 1;
       }
       release(&p->lock);
     }
-    if (found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+    if (found == 0)
       asm volatile("wfi");
-    }
+
+#else
+#error "Invalid SCHED_POLICY in kernel/param.h"
+#endif
   }
 }
 
