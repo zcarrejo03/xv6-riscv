@@ -6,6 +6,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "pstat.h"
+#include "rusage.h"
 
 struct cpu cpus[NCPU];
 
@@ -776,4 +777,38 @@ procdump(void)
     printk("%d %s %s", p->pid, state, p->name);
     printk("\n");
   }
+}
+
+// Copy information about active processes to the caller's pstat array.
+int
+kgetprocs(uint64 addr)
+{
+  struct proc *p;
+  struct pstat entry;
+  int count = 0;
+
+  acquire(&wait_lock);
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+
+    if (p->state != UNUSED) {
+      entry.pid = p->pid;
+      entry.state = p->state;
+      entry.size = p->sz;
+      entry.ppid = p->parent ? p->parent->pid : 0;
+      memmove(entry.name, p->name, sizeof(entry.name));
+
+      if (either_copyout(1, addr + count * sizeof(entry),
+                         &entry, sizeof(entry)) < 0) {
+        release(&p->lock);
+        release(&wait_lock);
+        return -1;
+      }
+      count++;
+    }
+
+    release(&p->lock);
+  }
+  release(&wait_lock);
+  return count;
 }

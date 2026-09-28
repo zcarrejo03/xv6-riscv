@@ -23,6 +23,8 @@ int mkdir(const char *);
 int chdir(const char *);
 int dup(int);
 int getpid(void);
+struct pstat;
+int getprocs(struct pstat *);
 char *sys_sbrk(int, int);
 int pause(int);
 int uptime(void);

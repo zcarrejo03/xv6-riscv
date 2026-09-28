@@ -138,6 +138,7 @@ UPROGS=\
 	$U/_sleep\
 	$U/_time\
 	$U/_matmul\
+        $U/_ps\
 	$U/_grep\
 	$U/_init\
 	$U/_kill\
