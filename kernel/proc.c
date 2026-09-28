@@ -7,6 +7,7 @@
 #include "defs.h"
 #include "pstat.h"
 #include "rusage.h"
+extern uint ticks;
 
 struct cpu cpus[NCPU];
 
@@ -128,6 +129,7 @@ found:
   p->state = USED;
   p->cputime = 0;
   p->priority = 0;
+  p->readytime = 0;
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -229,6 +231,7 @@ userinit(void)
 
   p->cwd = namei("/");
 
+  p->readytime = ticks;
   p->state = RUNNABLE;
 
   release(&p->lock);
@@ -303,6 +306,7 @@ kfork(void)
   release(&wait_lock);
 
   acquire(&np->lock);
+  np->readytime = ticks;
   np->state = RUNNABLE;
   release(&np->lock);
 
@@ -583,6 +587,7 @@ yield(void)
 {
   struct proc *p = myproc();
   acquire(&p->lock);
+  p->readytime = ticks;
   p->state = RUNNABLE;
   sched();
   release(&p->lock);
@@ -669,6 +674,7 @@ wakeup(void *chan)
       // If this waiting process has gotten so far as to actually
       // go to sleep, also set it back to RUNNING.
       if (p->state == SLEEPING) {
+        p->readytime = ticks;
         p->state = RUNNABLE;
       }
     }
@@ -690,6 +696,7 @@ kkill(int pid)
       p->killed = 1;
       if (p->state == SLEEPING) {
         // Wake process from sleep().
+        p->readytime = ticks;
         p->state = RUNNABLE;
       }
       release(&p->lock);
@@ -796,6 +803,7 @@ kgetprocs(uint64 addr)
     if (p->state != UNUSED) {
       entry.pid = p->pid;
       entry.priority = p->priority;
+      entry.readytime = p->readytime;
       entry.state = p->state;
       entry.size = p->sz;
       entry.ppid = p->parent ? p->parent->pid : 0;

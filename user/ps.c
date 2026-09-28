@@ -9,8 +9,10 @@ main(int argc, char **argv)
   struct pstat uproc[NPROC];
   int nprocs;
   int i;
+  uint now;
   char *state;
   static char *states[] = {
+    [USED]     "used",
     [SLEEPING] "sleeping",
     [RUNNABLE] "runnable",
     [RUNNING]  "running",
@@ -19,13 +21,19 @@ main(int argc, char **argv)
 
   nprocs = getprocs(uproc);
   if (nprocs < 0)
-    exit(-1);
+    exit(1);
+  now = uptime();
 
-  printf("pid\tstate\t\tsize\tpriority\tppid\tname\n");
+  printf("pid\tstate\t\tsize\tage\tpriority\tppid\tname\n");
   for (i = 0; i < nprocs; i++) {
     state = states[uproc[i].state];
-    printf("%d\t%s\t%ld\t%d\t%d\t%s\n",
-           uproc[i].pid, state, (long)uproc[i].size, uproc[i].priority,
+    printf("%d\t%s\t%ld\t", uproc[i].pid, state,
+           (long)uproc[i].size);
+
+    if (uproc[i].state == RUNNABLE)
+      printf("%d", (int)(now - uproc[i].readytime));
+
+    printf("\t%d\t%d\t%s\n", uproc[i].priority,
            uproc[i].ppid, uproc[i].name);
   }
 
