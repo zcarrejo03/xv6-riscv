@@ -25,6 +25,8 @@ int dup(int);
 int getpid(void);
 struct pstat;
 int getprocs(struct pstat *);
+int getpriority(void);
+int setpriority(int);
 char *sys_sbrk(int, int);
 int pause(int);
 int uptime(void);
