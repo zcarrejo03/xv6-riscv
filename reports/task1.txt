@@ -1,0 +1,47 @@
+Task 1 — O_APPEND
+
+Implementation
+
+I added O_APPEND with value 0x800 in kernel/fcntl.h and an append field to struct file in kernel/file.h. In sys_open() in kernel/sysfile.c, I set f->append based on the open flags.
+
+In filewrite() in kernel/file.c, immediately after acquiring the inode lock, I set f->off to f->ip->size when append is enabled. The lock remains held while writei() writes the data and the offset is updated. This prevents concurrent append writers from choosing the same EOF and overwriting each other.
+
+The existing write chunk limit is 3072 bytes. Writes up to this size use one locked chunk. Larger writes may interleave between chunks.
+
+O_CREATE and O_TRUNC retain their existing behavior. dup() and fork() preserve append behavior because their descriptors share the same struct file.
+
+Changed files
+
+kernel/fcntl.h
+kernel/file.h
+kernel/sysfile.c
+kernel/file.c
+Makefile — added fstest to UPROGS; CPUS was already 3.
+
+Testing
+
+I preserved the supplied full test file as user/fstest.c.original and created an append-only user/fstest.c for Task 1. All four append test bodies and assertions were unchanged. The rename tests require Task 2.
+
+$ fstest append
+test append_basic: OK
+test append_other_writer: OK
+test append_shared: OK
+test append_concurrent: OK
+fstest: ALL 4 TESTS PASSED
+
+$ usertests -q
+ALL TESTS PASSED
+
+Both commands also passed after make clean and rebuilding with make qemu.
+
+Why isn't setting f->off = ip->size once in open enough?
+
+Separate opens have separate offsets. Another descriptor can extend the file after open or between two append writes. An offset selected only at open becomes stale and could overwrite existing data. Each append write must select the current EOF.
+
+What could go wrong if you read ip->size before taking the inode lock?
+
+Two writers could read the same file size and choose the same offset. Even if they later acquire the lock separately, the second writer could use its stale offset and overwrite the first writer's record. Reading the size and writing under the same inode lock prevents this race.
+
+Use of AI statement
+
+I used OpenAI ChatGPT for step-by-step guidance on implementing O_APPEND, preparing an append-only version of the supplied tests, interpreting build and test output, and drafting these report answers. I am responsible for reviewing and understanding the code and explanations before submission.

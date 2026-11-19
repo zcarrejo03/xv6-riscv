@@ -210,7 +210,9 @@ sys_unlink(void)
     return -1;
 
   begin_op();
+  acquiresleep(&namespace_lock);
   if ((dp = nameiparent(path, name)) == 0) {
+    releasesleep(&namespace_lock);
     end_op();
     return -1;
   }
@@ -245,18 +247,20 @@ sys_unlink(void)
   iupdate(ip);
   iunlockput(ip);
 
+  releasesleep(&namespace_lock);
   end_op();
 
   return 0;
 
 bad:
   iunlockput(dp);
+  releasesleep(&namespace_lock);
   end_op();
   return -1;
 }
 
 static struct inode *
-create(char *path, short type, short major, short minor)
+create_locked(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
   char name[DIRSIZ];
@@ -325,6 +329,18 @@ fail:
   return 0;
 }
 
+static struct inode *
+create(char *path, short type, short major, short minor)
+{
+  struct inode *ip;
+
+  // Callers have already started a log transaction.
+  acquiresleep(&namespace_lock);
+  ip = create_locked(path, type, major, minor);
+  releasesleep(&namespace_lock);
+  return ip;
+}
+
 uint64
 sys_open(void)
 {
@@ -383,6 +399,7 @@ sys_open(void)
   f->ip = ip;
   f->readable = !(omode & O_WRONLY);
   f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
+  f->append = (omode & O_APPEND) != 0;
 
   if ((omode & O_TRUNC) && ip->type == T_FILE) {
     itrunc(ip);
@@ -527,4 +544,233 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+// Return 1 if dir is ancestor or lies below it, 0 otherwise,
+// and -1 if the parent chain cannot be followed.
+// Caller holds namespace_lock and no inode locks.
+static int
+rename_descendant(struct inode *dir, struct inode *ancestor)
+{
+  struct inode *ip = idup(dir);
+  struct inode *parent;
+
+  for (;;) {
+    if (ip == ancestor) {
+      iput(ip);
+      return 1;
+    }
+
+    ilock(ip);
+    if (ip->type != T_DIR || ip->nlink == 0) {
+      iunlockput(ip);
+      return -1;
+    }
+
+    if (ip->inum == ROOTINO) {
+      iunlockput(ip);
+      return 0;
+    }
+
+    parent = dirlookup(ip, "..", 0);
+    iunlockput(ip);
+    if (parent == 0)
+      return -1;
+    ip = parent;
+  }
+}
+
+static int rename_locked(char *old, char *new);
+
+uint64
+sys_rename(void)
+{
+  char old[MAXPATH], new[MAXPATH];
+  int result;
+
+  if (argstr(0, old, MAXPATH) < 0 ||
+      argstr(1, new, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  acquiresleep(&namespace_lock);
+  result = rename_locked(old, new);
+  releasesleep(&namespace_lock);
+  end_op();
+
+  return result;
+}
+
+// Caller holds namespace_lock inside a log transaction.
+static int
+rename_locked(char *old, char *new)
+{
+  struct inode *op = 0, *np = 0, *ip = 0, *target = 0;
+  char oldname[DIRSIZ], newname[DIRSIZ];
+  struct dirent de, dotdot;
+  uint oldoff = 0, newoff = 0;
+  int isdir, moving, delta;
+  int result = -1;
+
+  op = nameiparent(old, oldname);
+  np = nameiparent(new, newname);
+  if (op == 0 || np == 0)
+    goto out;
+
+  if (namecmp(oldname, ".") == 0 ||
+      namecmp(oldname, "..") == 0 ||
+      namecmp(newname, ".") == 0 ||
+      namecmp(newname, "..") == 0)
+    goto out;
+
+  if (op->dev != np->dev)
+    goto out;
+
+  ilock(op);
+  if (op->type == T_DIR && op->nlink > 0)
+    ip = dirlookup(op, oldname, &oldoff);
+  iunlock(op);
+  if (ip == 0 || ip == op || ip == np)
+    goto out;
+
+  ilock(ip);
+  isdir = ip->type == T_DIR;
+  iunlock(ip);
+
+  // Walk before locking parents: the walk may visit either parent.
+  if (isdir && rename_descendant(np, ip) != 0)
+    goto out;
+
+  // The namespace lock excludes competing create/unlink/rename
+  // operations. Lock distinct parents once, in inode-number order.
+  if (op == np) {
+    ilock(op);
+  } else if (op->inum < np->inum) {
+    ilock(op);
+    ilock(np);
+  } else {
+    ilock(np);
+    ilock(op);
+  }
+
+  if (op->type != T_DIR || np->type != T_DIR ||
+      op->nlink == 0 || np->nlink == 0)
+    goto parents;
+
+  target = dirlookup(np, newname, &newoff);
+
+  // Identical names or hard links to the same inode are a no-op.
+  if (target == ip) {
+    result = 0;
+    goto parents;
+  }
+
+  // Avoid locking a parent again as a child.
+  if (target == op || target == np)
+    goto parents;
+
+  ilock(ip);
+  if (target)
+    ilock(target);
+
+  if (ip->nlink < 1)
+    goto children;
+
+  if (target) {
+    if (target->nlink < 1 ||
+        (isdir != (target->type == T_DIR)))
+      goto children;
+    if (target->type == T_DIR && !isdirempty(target))
+      goto children;
+  }
+
+  moving = isdir && op != np;
+  delta = moving - (target && target->type == T_DIR);
+
+  if (moving && op->nlink < 2)
+    goto children;
+  if (delta > 0 && np->nlink >= NLINK_MAX)
+    goto children;
+
+  // Validate ".." before making any changes.
+  if (moving) {
+    if (readi(ip, 0, (uint64)&dotdot, sizeof(de),
+              sizeof(dotdot)) != sizeof(dotdot) ||
+        namecmp(dotdot.name, "..") != 0 ||
+        dotdot.inum != op->inum)
+      goto children;
+  }
+
+  memset(&de, 0, sizeof(de));
+  de.inum = ip->inum;
+  strncpy(de.name, newname, DIRSIZ);
+
+  // Renaming within one directory to an unused name needs no
+  // allocation, even when that directory or the disk is full.
+  if (op == np && target == 0) {
+    if (writei(op, 0, (uint64)&de, oldoff, sizeof(de)) != sizeof(de))
+      panic("rename: same directory");
+    result = 0;
+    goto children;
+  }
+
+  // Create/replace the destination first. For an absent destination,
+  // dirlink may fail to allocate; the source is still untouched.
+  if (target) {
+    if (writei(np, 0, (uint64)&de, newoff, sizeof(de)) != sizeof(de))
+      panic("rename: destination");
+  } else {
+    if (dirlink(np, newname, ip->inum) < 0)
+      goto children;
+  }
+
+  // All remaining writes update existing, allocated directory entries
+  // using kernel buffers, so no further allocation is needed.
+  memset(&de, 0, sizeof(de));
+  if (writei(op, 0, (uint64)&de, oldoff, sizeof(de)) != sizeof(de))
+    panic("rename: source");
+
+  if (moving) {
+    dotdot.inum = np->inum;
+    if (writei(ip, 0, (uint64)&dotdot, sizeof(de),
+               sizeof(dotdot)) != sizeof(dotdot))
+      panic("rename: dotdot");
+    op->nlink--;
+    iupdate(op);
+  }
+
+  if (delta != 0) {
+    np->nlink += delta;
+    iupdate(np);
+  }
+
+  if (target) {
+    target->nlink--;
+    iupdate(target);
+  }
+
+  result = 0;
+
+children:
+  if (target)
+    iunlock(target);
+  iunlock(ip);
+
+parents:
+  if (op != np)
+    iunlock(np);
+  iunlock(op);
+
+out:
+  // Drop references after releasing all inode locks. iput() may
+  // reclaim a replaced inode whose final link was removed.
+  if (target)
+    iput(target);
+  if (ip)
+    iput(ip);
+  if (np)
+    iput(np);
+  if (op)
+    iput(op);
+  return result;
 }

@@ -3,6 +3,7 @@ struct file {
   int ref; // reference count
   char readable;
   char writable;
+  char append; // append writes at the current end of file
   struct pipe *pipe; // FD_PIPE
   struct inode *ip;  // FD_INODE and FD_DEVICE
   uint off;          // FD_INODE
@@ -36,5 +37,6 @@ struct devsw {
 };
 
 extern struct devsw devsw[];
+extern struct sleeplock namespace_lock;
 
 #define CONSOLE 1

@@ -421,6 +421,7 @@ static uint
 bmap(struct inode *ip, uint bn)
 {
   uint addr, *a;
+  int new_indirect = 0;
   struct buf *bp;
 
   if (bn < NDIRECT) {
@@ -441,6 +442,7 @@ bmap(struct inode *ip, uint bn)
       if (addr == 0)
         return 0;
       ip->addrs[NDIRECT] = addr;
+      new_indirect = 1;
     }
     bp = bread(ip->dev, addr);
     a = (uint *)bp->data;
@@ -452,6 +454,10 @@ bmap(struct inode *ip, uint bn)
       }
     }
     brelse(bp);
+    if (addr == 0 && new_indirect) {
+      bfree(ip->dev, ip->addrs[NDIRECT]);
+      ip->addrs[NDIRECT] = 0;
+    }
     return addr;
   }
 
